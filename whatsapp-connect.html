@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connect WhatsApp · Saral CRM</title>
+<meta name="description" content="Connect your business WhatsApp number to Saral CRM.">
+<meta name="robots" content="noindex">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<style>
+  button.card { font: inherit; text-align: left; cursor: pointer; width: 100%; }
+  button.card:disabled { opacity: .5; cursor: default; }
+  #status:empty { display: none; }
+  #status.ok { border-left: 4px solid #2e9d5b; }
+  #status.bad { border-left: 4px solid #d04a2f; }
+</style>
+</head>
+<body>
+<header class="site"><div class="wrap">
+  <a class="brand" href="index.html"><img class="mark" src="icon.svg" alt="" width="36" height="36">Saral CRM</a>
+</div></header>
+
+<main><div class="wrap">
+  <h1>Connect WhatsApp</h1>
+  <p class="lead">Connect your business number once. Your team can then message
+  customers from Saral CRM, and replies arrive in the app.</p>
+
+  <div id="choose">
+    <h2>Which number will you use?</h2>
+    <div class="cards">
+      <button class="card" type="button" data-feature="whatsapp_business_app_onboarding">
+        <strong>My WhatsApp Business app number</strong>
+        <span>Keep using the WhatsApp Business app on your phone as well.</span>
+      </button>
+      <button class="card" type="button" data-feature="">
+        <strong>A new number</strong>
+        <span>A number that is not on WhatsApp yet. Used only through Saral CRM.</span>
+      </button>
+    </div>
+    <p class="note">A number on the ordinary WhatsApp app cannot be connected.
+    Move it to the free WhatsApp Business app first, or use a new number.
+    Meta will ask you to log in to Facebook and confirm your business.</p>
+  </div>
+
+  <p id="status" class="note" role="status" aria-live="polite"></p>
+</div></main>
+
+<footer class="site"><div class="wrap">
+  SARAL CRM (proprietor: Deep Patil), Vadodara, Gujarat, India · <a href="mailto:patildeep220220@gmail.com">patildeep220220@gmail.com</a> · We reply within 24 hours.
+</div></footer>
+
+<script>
+// Meta app "SaralCrm", and the Embedded Signup configuration made for it
+// (Meta app > Facebook Login for Business > Configurations). Neither is a
+// secret.
+const APP_ID = '29815951271338616';
+const CONFIG_ID = '1636768821254821';
+const GRAPH_VERSION = 'v23.0';
+const FINISH_URL =
+  'https://asia-south1-roshnicrm.cloudfunctions.net/finishWhatsAppConnect';
+
+// The one-time ticket the app put after the #. Never sent anywhere but our
+// own server.
+const ticket = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+
+const statusBox = document.getElementById('status');
+const buttons = [...document.querySelectorAll('button[data-feature]')];
+
+function say(text, kind) {
+  statusBox.textContent = text;
+  statusBox.className = 'note' + (kind ? ' ' + kind : '');
+}
+
+function lock(locked) {
+  for (const button of buttons) button.disabled = locked;
+}
+
+// Meta's own summary of what was chosen in its window: the WhatsApp account
+// and number. It arrives as a message from facebook.com, separately from
+// the sign-in code, and in either order.
+let chosen = null;
+let cancelled = null;
+window.addEventListener('message', (event) => {
+  let host = '';
+  try { host = new URL(event.origin).hostname; } catch (_) { return; }
+  if (host !== 'facebook.com' && !host.endsWith('.facebook.com')) return;
+  let data;
+  try {
+    data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+  } catch (_) {
+    return;
+  }
+  if (!data || data.type !== 'WA_EMBEDDED_SIGNUP') return;
+  if (String(data.event).startsWith('FINISH')) {
+    chosen = {
+      wabaId: data.data?.waba_id || '',
+      phoneNumberId: data.data?.phone_number_id || '',
+    };
+  } else if (data.event === 'CANCEL') {
+    cancelled = data.data?.current_step || 'unknown';
+  }
+});
+
+const wait = (ms) => new Promise((done) => setTimeout(done, ms));
+
+async function finish(code, coexistence) {
+  say('Connecting your number. This takes a few seconds…');
+  // Give Meta's summary a moment to arrive. The server can manage without
+  // it, so this never waits long.
+  for (let i = 0; i < 20 && !chosen; i++) await wait(150);
+
+  try {
+    const response = await fetch(FINISH_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticket,
+        code,
+        wabaId: chosen?.wabaId || '',
+        phoneNumberId: chosen?.phoneNumberId || '',
+        coexistence,
+      }),
+    });
+    const answer = await response.json().catch(() => ({}));
+    if (response.ok) {
+      document.getElementById('choose').hidden = true;
+      say(`Connected: ${answer.number || 'your number'}${answer.name ? ' (' + answer.name + ')' : ''}. `
+        + 'You can close this page and go back to Saral CRM.', 'ok');
+      return;
+    }
+    say(answer.error || 'That did not work. Please start again from the app.', 'bad');
+  } catch (_) {
+    say('Could not reach Saral CRM. Check your internet and try again.', 'bad');
+  }
+  lock(false);
+}
+
+function start(feature) {
+  chosen = null;
+  cancelled = null;
+  lock(true);
+  say('Follow the steps in the Meta window…');
+  FB.login(
+    // Meta's SDK insists on a plain function here, not an async one.
+    function (response) {
+      const code = response && response.authResponse && response.authResponse.code;
+      if (code) {
+        finish(code, feature === 'whatsapp_business_app_onboarding');
+        return;
+      }
+      lock(false);
+      say(cancelled
+        ? 'You closed the Meta window before the end. Choose an option to try again.'
+        : 'Meta did not finish. Choose an option to try again.', 'bad');
+    },
+    {
+      config_id: CONFIG_ID,
+      response_type: 'code',
+      override_default_response_type: true,
+      extras: { setup: {}, featureType: feature, sessionInfoVersion: '3' },
+    },
+  );
+}
+
+if (!ticket) {
+  lock(true);
+  say('Open this page from Saral CRM: Profile, then Connect WhatsApp.', 'bad');
+} else if (!CONFIG_ID) {
+  lock(true);
+  say('Connecting WhatsApp is not switched on yet. Please try again later.', 'bad');
+} else {
+  lock(true);
+  say('Loading…');
+  window.fbAsyncInit = function () {
+    FB.init({ appId: APP_ID, autoLogAppEvents: true, xfbml: false, version: GRAPH_VERSION });
+    lock(false);
+    say('');
+  };
+  for (const button of buttons) {
+    button.addEventListener('click', () => start(button.dataset.feature));
+  }
+  const sdk = document.createElement('script');
+  sdk.src = 'https://connect.facebook.net/en_US/sdk.js';
+  sdk.async = true;
+  sdk.defer = true;
+  sdk.crossOrigin = 'anonymous';
+  sdk.onerror = () => say('Could not load Meta. Check your internet and reload this page.', 'bad');
+  document.head.appendChild(sdk);
+}
+</script>
+</body>
+</html>
