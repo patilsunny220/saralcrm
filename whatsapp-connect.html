@@ -27,20 +27,17 @@
   customers from Saral CRM, and replies arrive in the app.</p>
 
   <div id="choose">
-    <h2>Which number will you use?</h2>
     <div class="cards">
-      <button class="card" type="button" data-feature="whatsapp_business_app_onboarding">
-        <strong>My WhatsApp Business app number</strong>
-        <span>Keep using the WhatsApp Business app on your phone as well.</span>
-      </button>
-      <button class="card" type="button" data-feature="">
-        <strong>A new number</strong>
-        <span>A number that is not on WhatsApp yet. Used only through Saral CRM.</span>
+      <button class="card" type="button" id="connect">
+        <strong>Connect WhatsApp</strong>
+        <span>Meta will ask you to log in to Facebook, confirm your business
+        and enter the number.</span>
       </button>
     </div>
-    <p class="note">A number on the ordinary WhatsApp app cannot be connected.
-    Move it to the free WhatsApp Business app first, or use a new number.
-    Meta will ask you to log in to Facebook and confirm your business.</p>
+    <p class="note">Use your WhatsApp Business app number (you keep using the
+    app on your phone as well), or a new number that is not on WhatsApp yet.
+    A number on the ordinary WhatsApp app cannot be connected: move it to the
+    free WhatsApp Business app first.</p>
   </div>
 
   <p id="status" class="note" role="status" aria-live="polite"></p>
@@ -52,11 +49,15 @@
 
 <script>
 // Meta app "SaralCrm", and the Embedded Signup configuration made for it
-// (Meta app > Facebook Login for Business > Configurations). Neither is a
-// secret.
+// (Meta app > Facebook Login for Business > Configurations: "Saral CRM
+// WhatsApp", Cloud API only, system-user token that never expires). Neither
+// is a secret.
 const APP_ID = '29815951271338616';
-const CONFIG_ID = '1636768821254821';
-const GRAPH_VERSION = 'v23.0';
+const CONFIG_ID = '1025827767217132';
+const GRAPH_VERSION = 'v26.0';
+// Meta's sign-up version. From v5, a WhatsApp Business app number is
+// offered by default, so one button covers both kinds of number.
+const SIGNUP_VERSION = 'v5';
 const FINISH_URL =
   'https://asia-south1-roshnicrm.cloudfunctions.net/finishWhatsAppConnect';
 
@@ -65,7 +66,7 @@ const FINISH_URL =
 const ticket = new URLSearchParams(location.hash.slice(1)).get('t') || '';
 
 const statusBox = document.getElementById('status');
-const buttons = [...document.querySelectorAll('button[data-feature]')];
+const button = document.getElementById('connect');
 
 function say(text, kind) {
   statusBox.textContent = text;
@@ -73,7 +74,7 @@ function say(text, kind) {
 }
 
 function lock(locked) {
-  for (const button of buttons) button.disabled = locked;
+  button.disabled = locked;
 }
 
 // Meta's own summary of what was chosen in its window: the WhatsApp account
@@ -93,21 +94,26 @@ window.addEventListener('message', (event) => {
   }
   if (!data || data.type !== 'WA_EMBEDDED_SIGNUP') return;
   if (String(data.event).startsWith('FINISH')) {
+    const info = data.data || {};
     chosen = {
-      wabaId: data.data?.waba_id || '',
-      phoneNumberId: data.data?.phone_number_id || '',
+      // v5 names the account "messaging account"; older versions waba_id.
+      wabaId: (info.messaging_account_ids && info.messaging_account_ids[0])
+        || info.waba_id || '',
+      phoneNumberId: info.phone_number_id || '',
+      onBizApp: info.is_on_biz_app === true
+        || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING',
     };
   } else if (data.event === 'CANCEL') {
-    cancelled = data.data?.current_step || 'unknown';
+    cancelled = (data.data && data.data.current_step) || 'unknown';
   }
 });
 
 const wait = (ms) => new Promise((done) => setTimeout(done, ms));
 
-async function finish(code, coexistence) {
+async function finish(code) {
   say('Connecting your number. This takes a few seconds…');
   // Give Meta's summary a moment to arrive. The server can manage without
-  // it, so this never waits long.
+  // it, and Meta's code only lasts 30 seconds, so this never waits long.
   for (let i = 0; i < 20 && !chosen; i++) await wait(150);
 
   try {
@@ -119,14 +125,18 @@ async function finish(code, coexistence) {
         code,
         wabaId: chosen?.wabaId || '',
         phoneNumberId: chosen?.phoneNumberId || '',
-        coexistence,
+        onBizApp: chosen?.onBizApp === true,
       }),
     });
     const answer = await response.json().catch(() => ({}));
     if (response.ok) {
       document.getElementById('choose').hidden = true;
       say(`Connected: ${answer.number || 'your number'}${answer.name ? ' (' + answer.name + ')' : ''}. `
-        + 'You can close this page and go back to Saral CRM.', 'ok');
+        + (answer.onBizApp
+          ? 'Keep the WhatsApp Business app open on your phone for a few minutes '
+            + 'while it finishes linking. '
+          : '')
+        + 'You can then close this page and go back to Saral CRM.', 'ok');
       return;
     }
     say(answer.error || 'That did not work. Please start again from the app.', 'bad');
@@ -136,7 +146,7 @@ async function finish(code, coexistence) {
   lock(false);
 }
 
-function start(feature) {
+function start() {
   chosen = null;
   cancelled = null;
   lock(true);
@@ -146,19 +156,19 @@ function start(feature) {
     function (response) {
       const code = response && response.authResponse && response.authResponse.code;
       if (code) {
-        finish(code, feature === 'whatsapp_business_app_onboarding');
+        finish(code);
         return;
       }
       lock(false);
       say(cancelled
-        ? 'You closed the Meta window before the end. Choose an option to try again.'
-        : 'Meta did not finish. Choose an option to try again.', 'bad');
+        ? 'You closed the Meta window before the end. Tap Connect WhatsApp to try again.'
+        : 'Meta did not finish. Tap Connect WhatsApp to try again.', 'bad');
     },
     {
       config_id: CONFIG_ID,
       response_type: 'code',
       override_default_response_type: true,
-      extras: { setup: {}, featureType: feature, sessionInfoVersion: '3' },
+      extras: { version: SIGNUP_VERSION },
     },
   );
 }
@@ -177,9 +187,7 @@ if (!ticket) {
     lock(false);
     say('');
   };
-  for (const button of buttons) {
-    button.addEventListener('click', () => start(button.dataset.feature));
-  }
+  button.addEventListener('click', start);
   const sdk = document.createElement('script');
   sdk.src = 'https://connect.facebook.net/en_US/sdk.js';
   sdk.async = true;
